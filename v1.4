@@ -1,0 +1,358 @@
+# גרסה משופרת של הסקריפט למענה אוטומטי ב-Exchange Online
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# בדיקה אם מודול Exchange Online קיים ומותקן
+function Test-ExchangeModule {
+    $moduleInstalled = Get-Module -ListAvailable -Name ExchangeOnlineManagement
+    if (-not $moduleInstalled) {
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "מודול ExchangeOnlineManagement לא מותקן. האם ברצונך להתקין אותו כעת?",
+            "מודול חסר",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo
+        )
+        
+        if ($result -eq 'Yes') {
+            try {
+                Install-Module -Name ExchangeOnlineManagement -Force -AllowClobber
+                return $true
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("שגיאה בהתקנת המודול: $_", "שגיאה")
+                return $false
+            }
+        } else {
+            return $false
+        }
+    }
+    return $true
+}
+
+# פונקציה לבחירת תאריך
+function Show-DatePicker {
+    param([string]$Title)
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size(280, 180)
+    $form.StartPosition = 'CenterScreen'
+    $form.RightToLeft = [System.Windows.Forms.RightToLeft]::Yes
+
+    $dtp = New-Object System.Windows.Forms.DateTimePicker
+    $dtp.Format = 'Custom'
+    $dtp.CustomFormat = "yyyy-MM-dd HH:mm"
+    $dtp.Width = 200
+    $dtp.Location = New-Object System.Drawing.Point(40, 30)
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = "בחר"
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $okButton.Location = New-Object System.Drawing.Point(100, 80)
+
+    $form.Controls.Add($dtp)
+    $form.Controls.Add($okButton)
+    $form.AcceptButton = $okButton
+
+    if ($form.ShowDialog() -eq 'OK') {
+        return $dtp.Value
+    } else {
+        return $null
+    }
+}
+
+# תצוגת טעינה
+function Show-LoadingForm {
+    param([string]$Message)
+    
+    $global:loadingForm = New-Object System.Windows.Forms.Form
+    $global:loadingForm.Text = "מתבצעת פעולה..."
+    $global:loadingForm.Size = New-Object System.Drawing.Size(300, 150)
+    $global:loadingForm.StartPosition = 'CenterScreen'
+    $global:loadingForm.FormBorderStyle = 'FixedDialog'
+    $global:loadingForm.ControlBox = $false
+    $global:loadingForm.RightToLeft = [System.Windows.Forms.RightToLeft]::Yes
+    
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $Message
+    $label.Location = New-Object System.Drawing.Point(20, 30)
+    $label.Size = New-Object System.Drawing.Size(260, 60)
+    $label.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    
+    $global:loadingForm.Controls.Add($label)
+    
+    # התחלת הטופס באופן לא חוסם
+    $global:loadingForm.Show()
+    $global:loadingForm.Refresh()
+}
+
+# סגירת טופס טעינה
+function Close-LoadingForm {
+    if ($global:loadingForm) {
+        $global:loadingForm.Close()
+        $global:loadingForm = $null
+    }
+}
+
+# בדיקת התחברות ל-Exchange Online
+function Connect-ToExchangeOnline {
+    try {
+        # בדיקה אם כבר מחובר
+        $session = Get-PSSession | Where-Object { $_.ConfigurationName -eq 'Microsoft.Exchange' -and $_.State -eq 'Opened' }
+        if ($null -ne $session) {
+            return $true
+        }
+        
+        Show-LoadingForm "מתחבר ל-Exchange Online..."
+        
+        # ניסיון התחברות
+        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        
+        Close-LoadingForm
+        return $true
+    }
+    catch {
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("שגיאה בהתחברות ל-Exchange Online: $_", "שגיאה בהתחברות")
+        return $false
+    }
+}
+
+# הגדרת הטופס הראשי
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "הגדרת מענה אוטומטי - Exchange Online"
+$form.Size = New-Object System.Drawing.Size(550, 550)
+$form.StartPosition = 'CenterScreen'
+$form.RightToLeft = [System.Windows.Forms.RightToLeft]::Yes
+
+# תיבת טקסט למשתמש
+$userLabel = New-Object System.Windows.Forms.Label
+$userLabel.Text = "כתובת משתמש (UPN):"
+$userLabel.Location = New-Object System.Drawing.Point(20, 20)
+$userLabel.Size = New-Object System.Drawing.Size(150, 20)
+
+$userBox = New-Object System.Windows.Forms.TextBox
+$userBox.Location = New-Object System.Drawing.Point(180, 20)
+$userBox.Width = 280
+
+# תאריך התחלה
+$startLabel = New-Object System.Windows.Forms.Label
+$startLabel.Text = "תאריך התחלה: (לא נבחר)"
+$startLabel.Location = New-Object System.Drawing.Point(20, 60)
+$startLabel.Size = New-Object System.Drawing.Size(300, 20)
+
+$startButton = New-Object System.Windows.Forms.Button
+$startButton.Text = "בחר תאריך התחלה"
+$startButton.Location = New-Object System.Drawing.Point(320, 55)
+$startButton.Add_Click({
+    $selected = Show-DatePicker "בחר תאריך התחלה"
+    if ($selected) {
+        $global:startDate = $selected
+        $startLabel.Text = "תאריך התחלה: $($selected.ToString('yyyy-MM-dd HH:mm'))"
+    }
+})
+
+# תאריך סיום
+$endLabel = New-Object System.Windows.Forms.Label
+$endLabel.Text = "תאריך סיום: (לא נבחר)"
+$endLabel.Location = New-Object System.Drawing.Point(20, 100)
+$endLabel.Size = New-Object System.Drawing.Size(300, 20)
+
+$endButton = New-Object System.Windows.Forms.Button
+$endButton.Text = "בחר תאריך סיום"
+$endButton.Location = New-Object System.Drawing.Point(320, 95)
+$endButton.Add_Click({
+    $selected = Show-DatePicker "בחר תאריך סיום"
+    if ($selected) {
+        $global:endDate = $selected
+        $endLabel.Text = "תאריך סיום: $($selected.ToString('yyyy-MM-dd HH:mm'))"
+    }
+})
+
+# תיבות סימון
+$internalBox = New-Object System.Windows.Forms.CheckBox
+$internalBox.Text = "שלח בתוך הארגון"
+$internalBox.Checked = $true
+$internalBox.Location = New-Object System.Drawing.Point(20, 140)
+$internalBox.Width = 150
+
+$externalBox = New-Object System.Windows.Forms.CheckBox
+$externalBox.Text = "שלח מחוץ לארגון"
+$externalBox.Checked = $true
+$externalBox.Location = New-Object System.Drawing.Point(180, 140)
+$externalBox.Width = 150
+
+# תיבת טקסט מרובת שורות להודעה
+$msgLabel = New-Object System.Windows.Forms.Label
+$msgLabel.Text = "טקסט ההודעה:"
+$msgLabel.Location = New-Object System.Drawing.Point(20, 180)
+
+$msgBox = New-Object System.Windows.Forms.TextBox
+$msgBox.Multiline = $true
+$msgBox.ScrollBars = "Vertical"
+$msgBox.Location = New-Object System.Drawing.Point(20, 200)
+$msgBox.Size = New-Object System.Drawing.Size(490, 190)
+
+# כפתור בדיקת משתמש
+$checkUserButton = New-Object System.Windows.Forms.Button
+$checkUserButton.Text = "בדוק משתמש"
+$checkUserButton.Location = New-Object System.Drawing.Point(20, 410)
+$checkUserButton.Size = New-Object System.Drawing.Size(120, 30)
+$checkUserButton.Add_Click({
+    if (-not $userBox.Text) {
+        [System.Windows.Forms.MessageBox]::Show("נא להזין כתובת משתמש", "שגיאה")
+        return
+    }
+
+    # בדיקת מודול והתחברות
+    if (-not (Test-ExchangeModule)) {
+        return
+    }
+    
+    if (-not (Connect-ToExchangeOnline)) {
+        return
+    }
+
+    try {
+        Show-LoadingForm "בודק את המשתמש..."
+        
+        # בדיקת קיום המשתמש
+        $mailbox = Get-Mailbox -Identity $userBox.Text -ErrorAction Stop
+        
+        Close-LoadingForm
+        
+        if ($mailbox) {
+            # הצגת המענה האוטומטי הנוכחי אם קיים
+            $currentConfig = Get-MailboxAutoReplyConfiguration -Identity $userBox.Text
+            
+            if ($currentConfig.AutoReplyState -eq "Enabled") {
+                $message = "נמצא מענה אוטומטי פעיל עבור משתמש זה:`n"
+                $message += "התחלה: $($currentConfig.StartTime)`n"
+                $message += "סיום: $($currentConfig.EndTime)`n"
+                $message += "מצב: פעיל"
+                
+                [System.Windows.Forms.MessageBox]::Show($message, "מענה אוטומטי קיים")
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("המשתמש נמצא אך אין לו מענה אוטומטי פעיל כרגע.", "מידע")
+            }
+        }
+    } catch {
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("שגיאה בבדיקת המשתמש: $_", "שגיאה")
+    }
+})
+
+# כפתור לביטול מענה אוטומטי
+$disableButton = New-Object System.Windows.Forms.Button
+$disableButton.Text = "בטל מענה אוטומטי"
+$disableButton.Location = New-Object System.Drawing.Point(150, 410)
+$disableButton.Size = New-Object System.Drawing.Size(120, 30)
+$disableButton.Add_Click({
+    if (-not $userBox.Text) {
+        [System.Windows.Forms.MessageBox]::Show("נא להזין כתובת משתמש", "שגיאה")
+        return
+    }
+
+    # בדיקת מודול והתחברות
+    if (-not (Test-ExchangeModule)) {
+        return
+    }
+    
+    if (-not (Connect-ToExchangeOnline)) {
+        return
+    }
+
+    try {
+        Show-LoadingForm "מבטל מענה אוטומטי..."
+        
+        # ביטול המענה האוטומטי
+        Set-MailboxAutoReplyConfiguration -Identity $userBox.Text -AutoReplyState Disabled
+        
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("המענה האוטומטי בוטל בהצלחה!", "הצלחה")
+    } catch {
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("שגיאה בביטול המענה האוטומטי: $_", "שגיאה")
+    }
+})
+
+# כפתור שליחה
+$submitButton = New-Object System.Windows.Forms.Button
+$submitButton.Text = "הפעל מענה אוטומטי"
+$submitButton.Location = New-Object System.Drawing.Point(320, 410)
+$submitButton.Size = New-Object System.Drawing.Size(160, 30)
+
+$submitButton.Add_Click({
+    if (-not $userBox.Text -or -not $msgBox.Text -or -not $global:startDate -or -not $global:endDate) {
+        [System.Windows.Forms.MessageBox]::Show("נא למלא את כל השדות ולבחור תאריכים.", "שגיאה")
+        return
+    }
+
+    # בדיקת מודול והתחברות
+    if (-not (Test-ExchangeModule)) {
+        return
+    }
+    
+    if (-not (Connect-ToExchangeOnline)) {
+        return
+    }
+
+    $internalMessage = ""
+    $externalMessage = ""
+    $externalAudience = "None"
+
+    if ($internalBox.Checked) {
+        $internalMessage = $msgBox.Text
+    }
+
+    if ($externalBox.Checked) {
+        $externalMessage = $msgBox.Text
+        $externalAudience = "All"
+    }
+
+    try {
+        Show-LoadingForm "מגדיר מענה אוטומטי..."
+        
+        Set-MailboxAutoReplyConfiguration -Identity $userBox.Text `
+            -AutoReplyState Enabled `
+            -StartTime $global:startDate `
+            -EndTime $global:endDate `
+            -InternalMessage $internalMessage `
+            -ExternalMessage $externalMessage `
+            -ExternalAudience $externalAudience -ErrorAction Stop
+        
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("המענה האוטומטי הוגדר בהצלחה!", "הצלחה")
+    } catch {
+        Close-LoadingForm
+        [System.Windows.Forms.MessageBox]::Show("שגיאה: $_", "שגיאה")
+    }
+})
+
+# כפתור יציאה
+$exitButton = New-Object System.Windows.Forms.Button
+$exitButton.Text = "יציאה"
+$exitButton.Location = New-Object System.Drawing.Point(200, 460)
+$exitButton.Size = New-Object System.Drawing.Size(120, 30)
+$exitButton.Add_Click({
+    $form.Close()
+})
+
+# הוספת כל הרכיבים
+$form.Controls.AddRange(@(
+    $userLabel, $userBox,
+    $startLabel, $startButton,
+    $endLabel, $endButton,
+    $internalBox, $externalBox,
+    $msgLabel, $msgBox,
+    $checkUserButton, $disableButton,
+    $submitButton, $exitButton
+))
+
+$form.Add_Shown({
+    # בדיקת מודול Exchange בהפעלה
+    Test-ExchangeModule | Out-Null
+    $form.Activate()
+})
+
+# הצגת הטופס
+[void]$form.ShowDialog()
