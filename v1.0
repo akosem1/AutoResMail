@@ -1,0 +1,161 @@
+
+
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+function Show-DatePicker {
+    param([string]$Title)
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size(250,150)
+    $form.StartPosition = 'CenterScreen'
+
+    $dtp = New-Object System.Windows.Forms.DateTimePicker
+    $dtp.Format = 'Custom'
+    $dtp.CustomFormat = "yyyy-MM-dd HH:mm"
+    $dtp.Width = 200
+    $dtp.Location = New-Object System.Drawing.Point(10,10)
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = "בחר"
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $okButton.Location = New-Object System.Drawing.Point(70,50)
+
+    $form.Controls.Add($dtp)
+    $form.Controls.Add($okButton)
+    $form.AcceptButton = $okButton
+
+    if ($form.ShowDialog() -eq 'OK') {
+        return $dtp.Value
+    } else {
+        return $null
+    }
+}
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "הגדרת מענה אוטומטי"
+$form.Size = New-Object System.Drawing.Size(500, 500)
+$form.StartPosition = 'CenterScreen'
+
+# תיבת טקסט למשתמש
+$userLabel = New-Object System.Windows.Forms.Label
+$userLabel.Text = "כתובת משתמש (UPN):"
+$userLabel.Location = New-Object System.Drawing.Point(20, 20)
+$userLabel.Size = New-Object System.Drawing.Size(150, 20)
+
+$userBox = New-Object System.Windows.Forms.TextBox
+$userBox.Location = New-Object System.Drawing.Point(180, 20)
+$userBox.Width = 280
+
+# תאריך התחלה
+$startLabel = New-Object System.Windows.Forms.Label
+$startLabel.Text = "תאריך התחלה: (לא נבחר)"
+$startLabel.Location = New-Object System.Drawing.Point(20, 60)
+$startLabel.Size = New-Object System.Drawing.Size(300, 20)
+
+$startButton = New-Object System.Windows.Forms.Button
+$startButton.Text = "בחר תאריך התחלה"
+$startButton.Location = New-Object System.Drawing.Point(320, 55)
+$startButton.Add_Click({
+    $selected = Show-DatePicker "בחר תאריך התחלה"
+    if ($selected) {
+        $global:startDate = $selected
+        $startLabel.Text = "תאריך התחלה: $($selected.ToString('yyyy-MM-dd HH:mm'))"
+    }
+})
+
+# תאריך סיום
+$endLabel = New-Object System.Windows.Forms.Label
+$endLabel.Text = "תאריך סיום: (לא נבחר)"
+$endLabel.Location = New-Object System.Drawing.Point(20, 100)
+$endLabel.Size = New-Object System.Drawing.Size(300, 20)
+
+$endButton = New-Object System.Windows.Forms.Button
+$endButton.Text = "בחר תאריך סיום"
+$endButton.Location = New-Object System.Drawing.Point(320, 95)
+$endButton.Add_Click({
+    $selected = Show-DatePicker "בחר תאריך סיום"
+    if ($selected) {
+        $global:endDate = $selected
+        $endLabel.Text = "תאריך סיום: $($selected.ToString('yyyy-MM-dd HH:mm'))"
+    }
+})
+
+# תיבות סימון
+$internalBox = New-Object System.Windows.Forms.CheckBox
+$internalBox.Text = "שלח בתוך הארגון"
+$internalBox.Checked = $true
+$internalBox.Location = New-Object System.Drawing.Point(20, 140)
+
+$externalBox = New-Object System.Windows.Forms.CheckBox
+$externalBox.Text = "שלח מחוץ לארגון"
+$externalBox.Checked = $true
+$externalBox.Location = New-Object System.Drawing.Point(180, 140)
+
+# תיבת טקסט מרובת שורות להודעה
+$msgLabel = New-Object System.Windows.Forms.Label
+$msgLabel.Text = "טקסט ההודעה:"
+$msgLabel.Location = New-Object System.Drawing.Point(20, 180)
+
+$msgBox = New-Object System.Windows.Forms.TextBox
+$msgBox.Multiline = $true
+$msgBox.ScrollBars = "Vertical"
+$msgBox.Location = New-Object System.Drawing.Point(20, 200)
+$msgBox.Size = New-Object System.Drawing.Size(440, 150)
+
+# כפתור שליחה
+$submitButton = New-Object System.Windows.Forms.Button
+$submitButton.Text = "הפעל מענה אוטומטי"
+$submitButton.Location = New-Object System.Drawing.Point(160, 370)
+$submitButton.Size = New-Object System.Drawing.Size(160, 30)
+
+$submitButton.Add_Click({
+    if (-not $userBox.Text -or -not $msgBox.Text -or -not $global:startDate -or -not $global:endDate) {
+        [System.Windows.Forms.MessageBox]::Show("נא למלא את כל השדות ולבחור תאריכים.", "שגיאה")
+        return
+    }
+
+    $internalMessage = ""
+    $externalMessage = ""
+    $externalAudience = "None"
+
+    if ($internalBox.Checked) {
+        $internalMessage = $msgBox.Text
+    }
+
+    if ($externalBox.Checked) {
+        $externalMessage = $msgBox.Text
+        $externalAudience = "All"
+    }
+
+    try {
+        Connect-ExchangeOnline -ShowBanner:$false
+
+        Set-MailboxAutoReplyConfiguration -Identity $userBox.Text `
+            -AutoReplyState Enabled `
+            -StartTime $global:startDate `
+            -EndTime $global:endDate `
+            -InternalMessage $internalMessage `
+            -ExternalMessage $externalMessage `
+            -ExternalAudience $externalAudience
+
+        [System.Windows.Forms.MessageBox]::Show("המענה האוטומטי הוגדר בהצלחה!", "הצלחה")
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("שגיאה: $_", "שגיאה")
+    }
+})
+
+# הוספת כל הרכיבים
+$form.Controls.AddRange(@(
+    $userLabel, $userBox,
+    $startLabel, $startButton,
+    $endLabel, $endButton,
+    $internalBox, $externalBox,
+    $msgLabel, $msgBox,
+    $submitButton
+))
+
+$form.Add_Shown({ $form.Activate() })
+[void]$form.ShowDialog()
